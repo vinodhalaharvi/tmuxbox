@@ -1,6 +1,6 @@
-# built or downloaded by `make web`; none of it is kept in the repository
+# built by `make web`, or downloaded by `make demo`
 /web/lib/bean.wasm
 /web/lib/wasm_exec.js
-/web/lib/three.min.js
 /web/vm/
 /.cache/
+/tmuxbox

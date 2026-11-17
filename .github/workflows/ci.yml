@@ -13,4 +13,5 @@ jobs:
           go-version: stable
       - run: test -z "$(gofmt -l .)"
       - run: make check
-      - run: make web
+      - run: make build
+      - run: ./tmuxbox -version
