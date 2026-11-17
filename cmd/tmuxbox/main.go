@@ -25,7 +25,7 @@ import (
 )
 
 // Version is what -version prints.
-const Version = "v0.1.0"
+const Version = "v0.1.1"
 
 func main() {
 	port := flag.Int("port", 0, "port to listen on, on this machine only; 0 picks a free one")
@@ -127,7 +127,7 @@ func servePanes(w http.ResponseWriter, _ *http.Request) {
 		out.Error = err.Error()
 	}
 	for i := range panes {
-		panes[i].Lines = capture(panes[i].ID)
+		panes[i].Lines, panes[i].Ansi, panes[i].Alt = capture(panes[i].ID)
 	}
 	out.Panes, out.Total = panes, total
 	if out.Panes == nil {

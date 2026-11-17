@@ -104,6 +104,29 @@ const HOME={sx:1,sy:1,sz:1,rx:0.2,ry:-0.45};
 const LO=0.6, HI=1.5, COLS=46, CH=0.602, MAXW=9;
 const A=1.55, B=0.9, C=0.85, BEND=0.4;      // the bean before resizing: half-length, half-height, half-depth, and how far its ends curve back
 const TW=2048, TH=1024, V0=0.19, V1=0.81;   // the texture, and the band of it the panes use
+// A pane's colours: the sixteen terminal colours tuned for the dark pane, the
+// 256-colour cube, and a reader that splits one captured line into runs.
+const PAL=['#2a3438','#e5747d','#7fd88b','#e5c07b','#6cb6f5','#c98be0','#56c2cc','#d6dde0','#6b7b80','#ff8a93','#a3eaae','#f4d593','#8ccbff','#dba6f2','#7fdde8','#ffffff'];
+function c256(n){if(n<16)return PAL[n];if(n>=232){const v=8+(n-232)*10;return 'rgb('+v+','+v+','+v+')'}n-=16;const f=x=>x?55+x*40:0;return 'rgb('+f(n/36|0)+','+f((n/6|0)%6)+','+f(n%6)+')'}
+function runs(s){
+  const out=[];let fg=null,bg=null,inv=false,buf='',i=0;
+  const push=()=>{if(buf){out.push({t:buf,fg:inv?(bg||'#11181b'):fg,bg:inv?(fg||'#d6dde0'):bg});buf=''}};
+  while(i<s.length){const ch=s[i];
+    if(ch==='\x1b'){const m=/^\x1b\[([0-9;:?]*)([A-Za-z])/.exec(s.substr(i,48));
+      if(!m){i+=/^\x1b[()]/.test(s.substr(i,2))?3:1;continue}
+      i+=m[0].length;if(m[2]!=='m')continue;push();
+      const c=m[1]===''?[0]:m[1].split(/[;:]/).map(Number);
+      for(let k=0;k<c.length;k++){const v=c[k];
+        if(v===0){fg=bg=null;inv=false}else if(v===7)inv=true;else if(v===27)inv=false;
+        else if(v>=30&&v<=37)fg=PAL[v-30];else if(v===39)fg=null;else if(v>=90&&v<=97)fg=PAL[v-82];
+        else if(v>=40&&v<=47)bg=PAL[v-40];else if(v===49)bg=null;else if(v>=100&&v<=107)bg=PAL[v-92];
+        else if(v===38||v===48){let col=null;
+          if(c[k+1]===5){col=c256(c[k+2]|0);k+=2}else if(c[k+1]===2){col='rgb('+(c[k+2]|0)+','+(c[k+3]|0)+','+(c[k+4]|0)+')';k+=4}
+          if(col){if(v===38)fg=col;else bg=col}}}
+      continue}
+    if(ch==='\x0e'||ch==='\x0f'){i++;continue}
+    buf+=ch;i++}
+  push();return out}
 const el=(n,cls,txt)=>{const e=document.createElement(n);if(cls)e.className=cls;if(txt!=null)e.textContent=txt;return e};
 let sx=HOME.sx, sy=HOME.sy, sz=HOME.sz, rx=HOME.rx, ry=HOME.ry;
 // tmuxbox serves this page with a token in its address; without one, this is the recorded demo
@@ -160,9 +183,13 @@ function draw(){
       g.translate(x,y);g.scale(1,k);
       const fs=Math.max(4,Math.min(30,(w-14)/(P.cols*CH))), lh=fs*1.22, H=hh/k, sb=lh*1.15;
       g.font='500 '+fs+'px "IBM Plex Mono", ui-monospace, Menlo, monospace';g.textBaseline='top';
-      const rows=Math.max(1,Math.floor((H-sb-4)/lh)), from=Math.max(0,P.lines.length-rows);
+      const rows=Math.max(1,Math.floor((H-sb-4)/lh)), from=P.alt?0:Math.max(0,P.lines.length-rows);
       P.lines.slice(from).forEach((ln,j)=>{
-        if(ln.startsWith('$')){g.fillStyle='#7fd88b';g.fillText('$',7,4+j*lh);g.fillStyle='#d6dde0';g.fillText(ln.slice(1),7+fs*CH,4+j*lh)}
+        const an=P.ansi&&P.ansi[from+j];
+        if(an&&an.indexOf('\x1b')>=0){let col=0;for(const r of runs(an)){const rx=7+col*fs*CH;
+          if(r.bg){g.fillStyle=r.bg;g.fillRect(rx,4+j*lh-lh*0.08,r.t.length*fs*CH+0.5,lh)}
+          if(r.t.trim()){g.fillStyle=r.fg||'#d6dde0';g.fillText(r.t,rx,4+j*lh)}col+=r.t.length}}
+        else if(ln.startsWith('$')){g.fillStyle='#7fd88b';g.fillText('$',7,4+j*lh);g.fillStyle='#d6dde0';g.fillText(ln.slice(1),7+fs*CH,4+j*lh)}
         else{g.fillStyle='#d6dde0';g.fillText(ln,7,4+j*lh)}});
       g.fillStyle=P.live?'#f2b84b':'#2f8f66';g.fillRect(0,H-sb,w,sb);
       g.fillStyle='#07130e';g.fillText(P.name+(P.live?'  live':''),7,H-sb+lh*0.08);
@@ -442,7 +469,7 @@ async function poll(){
     if(!r.ok)throw new Error(r.status===403?'This address has no valid token. Start tmuxbox again and use the address it prints.':'tmuxbox answered '+r.status+'.');
     const d=await r.json(), before=sig(), keep=picked>=0&&panes[picked]?panes[picked].key:null;
     panes=d.panes.map(p=>{const old=panes.find(o=>o.key===p.key);
-      return {key:p.key,id:p.id,name:p.name,w:p.w,h:p.h,lines:p.lines||[],cols:Math.max(20,Math.min(64,p.w)),live:false,rect:old?old.rect:null,half:old?old.half:0,share:old?old.share:0}});
+      return {key:p.key,id:p.id,name:p.name,w:p.w,h:p.h,lines:p.lines||[],ansi:p.ansi||null,alt:!!p.alt,cols:Math.max(20,Math.min(64,p.w)),live:false,rect:old?old.rect:null,half:old?old.half:0,share:old?old.share:0}});
     picked=keep?panes.findIndex(P=>P.key===keep):-1;
     info.live=d.error?'tmux says: '+d.error+'.':d.total>d.panes.length?'Showing the '+d.panes.length+' most recently active of '+d.total+' panes.':'';
     if(sig()!==before){table=[];requestSolve()}

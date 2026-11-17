@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.1 - 2026-11-17
+
+- Panes on the bean keep their colours, so htop, coloured prompts and
+  highlighted output look as they do in the terminal.
+- A pane running a full-screen program is shown from its top line, not its
+  last.
+
 ## v0.1.0 - 2026-11-17
 
 - `tmuxbox` shows the panes of your tmux server on a bean in the browser,

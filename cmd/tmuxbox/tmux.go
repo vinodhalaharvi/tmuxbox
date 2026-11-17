@@ -27,6 +27,8 @@ type Pane struct {
 	W        int      `json:"w"`
 	H        int      `json:"h"`
 	Lines    []string `json:"lines"`
+	Ansi     []string `json:"ansi,omitempty"`
+	Alt      bool     `json:"alt,omitempty"`
 	session  string   // $3
 	window   string   // @7
 	activity int64
@@ -110,20 +112,39 @@ func listPanes() ([]Pane, int, error) {
 	return panes, total, nil
 }
 
-// capture reads what a pane shows now.
-func capture(id string) []string {
-	out, err := tmux("capture-pane", "-p", "-t", id)
+// escapes matches the terminal control sequences tmux leaves in a capture
+// taken with colours.
+var escapes = regexp.MustCompile(`\x1b\[[0-9;:?]*[A-Za-z]|\x1b[()][0-9A-Za-z]|[\x0e\x0f]`)
+
+// capture reads what a pane shows now: the plain text of each line, the same
+// lines with their colour sequences when the pane has any, and whether a
+// full-screen program has the pane.
+func capture(id string) (plain, ansi []string, alt bool) {
+	out, err := tmux("capture-pane", "-p", "-e", "-t", id)
 	if err != nil {
-		return nil
+		return nil, nil, false
 	}
-	lines := strings.Split(out, "\n")
-	for i := range lines {
-		lines[i] = strings.TrimRight(lines[i], " ")
+	ansi = strings.Split(out, "\n")
+	plain = make([]string, len(ansi))
+	coloured := false
+	for i := range ansi {
+		plain[i] = strings.TrimRight(escapes.ReplaceAllString(ansi[i], ""), " ")
+		if plain[i] != strings.TrimRight(ansi[i], " ") {
+			coloured = true
+		}
 	}
-	for len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
+	n := len(plain)
+	for n > 0 && plain[n-1] == "" {
+		n--
 	}
-	return lines
+	plain, ansi = plain[:n], ansi[:n]
+	if !coloured {
+		ansi = nil
+	}
+	if on, err := tmux("display-message", "-p", "-t", id, "#{alternate_on}"); err == nil {
+		alt = strings.TrimSpace(on) == "1"
+	}
+	return plain, ansi, alt
 }
 
 func findPane(id string) (Pane, error) {
