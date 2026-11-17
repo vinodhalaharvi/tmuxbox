@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terminal bean</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* layout: one screen. The bean fills it; the only other thing shown is the text being typed. A terminal takes the whole screen when a pane is opened. */
+:root{
+  --bg:#eef1f1; --ink:#152226; --muted:#5d6b6f; --line:#cfd7d8; --accent:#0f766e; --sheet:#ffffff; --miss:#b4411f;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace; --sans:"IBM Plex Sans",system-ui,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0b1113; --ink:#e6eeee; --muted:#93a3a6; --line:#2b393c; --accent:#3fc1b3; --sheet:#172124; --miss:#f08a5d; color-scheme:dark;}}
+:root[data-theme="dark"]{
+  --bg:#0b1113; --ink:#e6eeee; --muted:#93a3a6; --line:#2b393c; --accent:#3fc1b3; --sheet:#172124; --miss:#f08a5d; color-scheme:dark;}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.45}
+#stage,#term{position:absolute;inset:0}
+.scene{position:absolute;inset:0;touch-action:none;cursor:grab;user-select:none;-webkit-user-select:none;outline:none}
+.scene canvas{display:block;width:100%;height:100%}
+.nogl{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:20px;text-align:center;color:var(--muted)}
+/* the text being typed: a bare input, so a phone can raise its keyboard on it */
+#q{position:absolute;left:0;right:0;bottom:max(18px,env(safe-area-inset-bottom));width:100%;text-align:center;border:0;outline:0;background:transparent;
+   color:var(--ink);caret-color:var(--accent);font-family:var(--mono);font-weight:500;font-size:clamp(20px,4.2vw,34px);padding:8px 16px}
+#q::placeholder{color:var(--muted);opacity:.55;font-weight:400;font-size:.62em}
+#q.miss{color:var(--miss)}
+#q::-webkit-search-cancel-button{display:none}
+#note{position:absolute;right:14px;top:12px;font-size:12.5px;color:var(--muted)}
+#help{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:16px;background:color-mix(in srgb,var(--bg) 78%,transparent)}
+.sheet{background:var(--sheet);border:1px solid var(--line);border-radius:12px;padding:18px 20px;max-width:560px;max-height:100%;overflow:auto;display:flex;flex-direction:column;gap:12px}
+.sheet h1{font-size:18px;font-weight:600;margin:0}
+.sheet p{margin:0;font-size:13.5px;color:var(--muted)}
+.keys{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:14px;align-items:baseline;margin:0}
+.keys dt{font-family:var(--mono);font-size:12.5px;white-space:nowrap;color:var(--accent)}
+.keys dd{margin:0}
+#term{background:#000;display:flex;flex-direction:column}
+.vmwrap{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:8px}
+.vm>div{white-space:pre;font-family:var(--mono);font-size:min(calc((100vw - 20px)/48.4),calc((100vh - 64px)/30.5));line-height:1.2;color:#ccc}
+.state{font-size:12.5px;color:#7d8b90;padding:6px 12px;font-family:var(--mono)}
+.touchbar{display:none;gap:8px;padding:8px;flex-wrap:wrap;align-items:center}
+.touchbar form{display:flex;gap:8px;flex:1;min-width:200px}
+.touchbar input{flex:1;min-width:0;font-family:var(--mono);font-size:16px;padding:8px 10px;border-radius:8px;border:1px solid #2a3438;background:#101518;color:#d6dde0}
+.touchbar button{font:inherit;font-size:13px;color:#d6dde0;background:#101518;border:1px solid #2a3438;border-radius:8px;padding:8px 10px}
+@media (pointer:coarse){.touchbar{display:flex}}
+a{color:var(--accent)}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="scene" id="scene" tabindex="-1" role="img" aria-label="A bean-shaped solid covered in ten terminal panes. Type to find a pane and press Enter to open it. Press F1 for all keys."></div>
+  <input id="q" type="search" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="type to find a pane  ·  Enter opens it  ·  F1 for keys" aria-label="Type to find a pane; Enter opens it">
+  <div id="note" aria-live="polite" hidden></div>
+  <div id="help" hidden>
+    <div class="sheet" role="dialog" aria-label="Keys and details">
+      <h1>Terminal bean</h1>
+      <dl class="keys">
+        <dt>type</dt><dd>turn to the pane that matches best, by name or contents</dd>
+        <dt>Enter</dt><dd>open that pane as a real Linux terminal</dd>
+        <dt>Ctrl ]</dt><dd>leave the terminal, back to the bean</dd>
+        <dt>Tab, Shift Tab</dt><dd>next and previous pane</dd>
+        <dt>Esc</dt><dd>clear what you typed</dd>
+        <dt>← → ↑ ↓</dt><dd>turn the bean</dd>
+        <dt>⌘ or Ctrl + ↑ ↓</dt><dd>bigger, smaller</dd>
+        <dt>⌘ or Ctrl + ← →</dt><dd>shorter, longer</dd>
+        <dt>Home</dt><dd>reset shape and view</dd>
+        <dt>⌘ or Ctrl + ⌫</dt><dd>forget usage</dd>
+        <dt>Alt Enter</dt><dd>ask the browser for full screen</dd>
+        <dt>F1</dt><dd>show or hide this</dd>
+      </dl>
+      <p>On a touch screen: drag to turn, pinch to resize, tap a pane to open it, tap the text to type.</p>
+      <p id="infoPlan"></p>
+      <p id="infoShape"></p>
+      <p id="infoUse"></p>
+      <p>Panes you open more often get more room. One dynamic program, written with Dyna and the collage engine and run here as WebAssembly, decides which panes go on the front and back, how each half is cut, and how big each pane is. Resizing only looks its answer up. Until opened, a pane shows output recorded from tmux; an opened pane is its own Linux machine in this page, not your computer.</p>
+      <p>Emulator: <a href="https://github.com/copy/v86">v86</a> (BSD). Linux image from <a href="https://github.com/copy/images">copy/images</a>: Linux 2.6 and BusyBox, GPL. Drawing: <a href="https://threejs.org">three.js</a> (MIT).</p>
+    </div>
+  </div>
+</div>
+<div id="term" hidden>
+  <div class="vmwrap" id="vmwrap"></div>
+  <div class="state" id="vmstate"></div>
+  <div class="touchbar">
+    <button id="back" type="button">Back</button>
+    <form id="send"><input id="cmd" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="type a command" aria-label="Command to type into the terminal"><button type="submit">Send</button></form>
+    <span class="keysrow"><button type="button" data-k="ctrlc">Ctrl-C</button> <button type="button" data-k="tab">Tab</button> <button type="button" data-k="up">Up</button></span>
+  </div>
+</div>
+<script src="lib/three.min.js"></script>
+<script src="vm/libv86.js"></script>
+<script>
+const D={"panes":[{"n":"spec","t":["$ sed -n 7,22p spec.sexp | cut -c1-45","    (doc \"Package accounts is where viewers a","    (entity Session","      (field ID string)","      (field Subject string)","      (field ExpiresAt time.Time)","      (store get save delete (durable) (cross","    (auth","      (doc \"Principal is the viewer or creato","      (revocable)","      (expiring)))","","  (package channels","    (doc \"Package channels is who publishes.\"","    (entity Channel","      (field ID uuid.UUID)","      (field Handle string)","$"]},{"n":"generate","t":["$ tilegen -out out spec.sexp 2>&1 | tail -12","  wrote  moderation/oidc_authenticator.go","  wrote  moderation/http_gen.go","  wrote  moderation/http.go","  wrote  db/schema.sql","  wrote  db/query.sql","  wrote  sqlc.yaml","  wrote  buf.yaml","  wrote  buf.gen.yaml","  wrote  tilegen.lock","  wrote  tilegen.tasks.json","72 open LLM task(s), 0 hole(s) already filled","-> out/tilegen.tasks.json","next: cd out && buf generate && sqlc generate","&& go mod tidy && go build ./...","$"]},{"n":"build","t":["go: found google.golang.org/protobuf/reflect/p","rotoreflect in google.golang.org/protobuf v1.3","6.12","go: found google.golang.org/protobuf/runtime/p","rotoimpl in google.golang.org/protobuf v1.36.1","2","go: found github.com/jackc/pgx/v5 in github.co","m/jackc/pgx/v5 v5.13.0","go: found github.com/jackc/pgx/v5/pgconn in gi","thub.com/jackc/pgx/v5 v5.13.0","go: found github.com/jackc/pgx/v5/pgtype in gi","thub.com/jackc/pgx/v5 v5.13.0","go: found github.com/coreos/go-oidc/v3/oidc in"," github.com/coreos/go-oidc/v3 v3.21.0","go: found github.com/hashicorp/vault/api in gi","thub.com/hashicorp/vault/api v1.23.0","go: found github.com/nats-io/nats.go/jetstream"," in github.com/nats-io/nats.go v1.56.0","ok","$"]},{"n":"tree","t":["$ tree -L 1 --dirsfirst out | head -17","out","|-- accounts","|-- channels","|-- db","|-- engagement","|-- moderation","|-- monetization","|-- proto","|-- uploads","|-- videos","|-- watch","|-- buf.gen.yaml","|-- buf.yaml","|-- go.mod","|-- sqlc.yaml","|-- tilegen.lock","`-- tilegen.tasks.json","$"]},{"n":"holes","t":["$ grep -rn 'tilegen:hole' --include='*.go' out"," | wc -l; jq -r '.tasks[].id' out/tilegen.task","s.json | head -12","72","accounts.PostgresSessionStore.Get","accounts.PostgresSessionStore.Save","accounts.PostgresSessionStore.Delete","accounts.SessionAuthenticator.Authenticate","channels.PostgresChannelStore.Get","channels.PostgresChannelStore.List","channels.PostgresChannelStore.Save","channels.PostgresChannelStore.Delete","channels.PostgresChannelStore.GetByHandle","channels.PostgresChannelStore.ListByOwnerID","channels.APIServer.validateChannel","channels.APIServer.codeForChannel","$"]},{"n":"explain","t":["$ ./summary","accounts.Auth                session-store 23","accounts.SessionStore        postgres-sqlc 44","channels.API                 connect 16","channels.ChannelStore        postgres-sqlc 44","engagement.Bus               nats-core 33","engagement.CommentStore      postgres-sqlc 48","engagement.PlaylistStore     postgres-sqlc 55","engagement.SubscriptionStore postgres-sqlc 44","moderation.Auth              oidc 40","moderation.ReportStore       postgres-sqlc 48","monetization.Bus             nats-jetstream 47","monetization.PayoutStore     postgres-sqlc 48","monetization.Secrets         vault 25","uploads.Bus                  nats-jetstream 47","uploads.RenditionStore       postgres-sqlc 44","uploads.Secrets              file-secrets 7","uploads.UploadStore          postgres-sqlc 55","$"]},{"n":"gomod","t":["$ head -16 out/go.mod | cut -c1-45","module github.com/acme/tube","","go 1.26.0","","require (","        connectrpc.com/connect v1.21.1","        github.com/coreos/go-oidc/v3 v3.21.0","        github.com/google/uuid v1.6.0","        github.com/hashicorp/vault/api v1.23.0","        github.com/jackc/pgx/v5 v5.13.0","        github.com/nats-io/nats.go v1.56.0","        google.golang.org/protobuf v1.36.12",")","","require (","        github.com/cenkalti/backoff/v4 v4.3.0","// ind","$"]},{"n":"tiles","t":["$ tilegen tiles | grep ^capability | cut -c1-4","5; tilegen tiles | grep -c ^select","capability api        offered by connect, grp","capability auth       offered by api-key, bas","capability event-bus  offered by amqp10, asyn","capability secrets    offered by aws-secrets-","capability store      offered by aerospike, a","capability transport  offered by kafka, nats-","118","$"]},{"n":"gitlog","t":["$ git -C /home/claude/tilegen log --oneline -1","5 | cut -c1-45","9ebe8f4 tiles: goqite's dependency counts the","21308bf tiles: goqite, an event bus in a SQLi","5f4d65f tiles: eight more auth schemes, as fi","742a960 tiles: eight more event buses, as fil","7a01a88 tiles: eleven more stores, as files","b024d01 test: wait for tmux to report a new p","349a6e1 v0.3.6","ccf3307 tiles: hand-written SQL in a document","04d2940 tiles: twenty-one more, as files","21f60a0 tiles: mongo, kafka and nats-core are","c13aef3 tiles: AWS Secrets Manager, and SNS w","79e4a3c tiles: jwt-jwks depends on the same i","cdd771b tiles: ten more, as files","233d955 tiles: three event buses, as files","717af45 tiles: a tile kept as a file may offe","$"]},{"n":"schema","t":["$ head -17 out/db/schema.sql | cut -c1-45","-- Code generated by tilegen. DO NOT EDIT.","","CREATE TABLE sessions (","  id TEXT PRIMARY KEY,","  subject TEXT NOT NULL,","  expires_at TIMESTAMPTZ NOT NULL",");","","CREATE TABLE channels (","  id UUID PRIMARY KEY,","  handle TEXT NOT NULL,","  owner_id TEXT NOT NULL,","  name TEXT NOT NULL,","  about TEXT NOT NULL,","  created_at TIMESTAMPTZ NOT NULL",");","","$"]}],"aspects":[1.6,1.6,0.9,2.4,1.6,0.8,1.2,1.6,1.0,1.3],"start":{"states":2045,"alternatives":67743,"table":[{"aspect":0.8122523963562355,"score":0.15163477251146384,"front":{"p":-1,"c":"V","f":0.2685,"l":{"p":-1,"c":"H","f":0.5,"l":{"p":0},"r":{"p":7}},"r":{"p":-1,"c":"V","f":0.4894,"l":{"p":3},"r":{"p":-1,"c":"H","f":0.4348,"l":{"p":8},"r":{"p":9}}}},"back":{"p":-1,"c":"H","f":0.5313,"l":{"p":-1,"c":"V","f":0.7,"l":{"p":-1,"c":"V","f":0.4286,"l":{"p":1},"r":{"p":6}},"r":{"p":4}},"r":{"p":-1,"c":"V","f":0.4706,"l":{"p":2},"r":{"p":5}}}},{"aspect":1,"score":0.1506247351835902,"front":{"p":-1,"c":"H","f":0.4759,"l":{"p":-1,"c":"V","f":0.619,"l":{"p":-1,"c":"V","f":0.5,"l":{"p":0},"r":{"p":7}},"r":{"p":9}},"r":{"p":-1,"c":"V","f":0.4545,"l":{"p":6},"r":{"p":8}}},"back":{"p":-1,"c":"H","f":0.5862,"l":{"p":-1,"c":"V","f":0.75,"l":{"p":-1,"c":"V","f":0.5,"l":{"p":1},"r":{"p":4}},"r":{"p":3}},"r":{"p":-1,"c":"V","f":0.4706,"l":{"p":2},"r":{"p":5}}}},{"aspect":1.2311444133449163,"score":0.13502015762195746,"front":{"p":-1,"c":"H","f":0.4522,"l":{"p":-1,"c":"V","f":0.619,"l":{"p":-1,"c":"V","f":0.5,"l":{"p":0},"r":{"p":7}},"r":{"p":9}},"r":{"p":-1,"c":"V","f":0.75,"l":{"p":-1,"c":"V","f":0.5,"l":{"p":1},"r":{"p":4}},"r":{"p":3}}},"back":{"p":-1,"c":"H","f":0.4371,"l":{"p":-1,"c":"V","f":0.4706,"l":{"p":2},"r":{"p":5}},"r":{"p":-1,"c":"V","f":0.4545,"l":{"p":6},"r":{"p":8}}}},{"aspect":1.5157165665103975,"score":0.1359255560550059,"front":{"p":-1,"c":"V","f":0.5224,"l":{"p":-1,"c":"H","f":0.5,"l":{"p":0},"r":{"p":7}},"r":{"p":-1,"c":"H","f":0.7143,"l":{"p":-1,"c":"H","f":0.48,"l":{"p":6},"r":{"p":9}},"r":{"p":8}}},"back":{"p":-1,"c":"V","f":0.5479,"l":{"p":-1,"c":"H","f":0.7273,"l":{"p":-1,"c":"H","f":0.6667,"l":{"p":1},"r":{"p":5}},"r":{"p":2}},"r":{"p":-1,"c":"H","f":0.6,"l":{"p":3},"r":{"p":4}}}},{"aspect":1.8660659830736142,"score":0.14590935393061896,"front":{"p":-1,"c":"V","f":0.5393,"l":{"p":-1,"c":"H","f":0.3902,"l":{"p":0},"r":{"p":-1,"c":"H","f":0.48,"l":{"p":6},"r":{"p":9}}},"r":{"p":-1,"c":"H","f":0.6667,"l":{"p":-1,"c":"H","f":0.5,"l":{"p":1},"r":{"p":7}},"r":{"p":4}}},"back":{"p":-1,"c":"H","f":0.4988,"l":{"p":-1,"c":"V","f":0.5854,"l":{"p":-1,"c":"H","f":0.5294,"l":{"p":2},"r":{"p":5}},"r":{"p":3}},"r":{"p":8}}},{"aspect":2.2973967099940693,"score":0.12412961358284014,"front":{"p":-1,"c":"H","f":0.694,"l":{"p":-1,"c":"H","f":0.4348,"l":{"p":-1,"c":"V","f":0.3846,"l":{"p":0},"r":{"p":8}},"r":{"p":-1,"c":"V","f":0.5,"l":{"p":4},"r":{"p":7}}},"r":{"p":-1,"c":"V","f":0.52,"l":{"p":6},"r":{"p":9}}},"back":{"p":-1,"c":"H","f":0.3609,"l":{"p":-1,"c":"V","f":0.6,"l":{"p":1},"r":{"p":3}},"r":{"p":-1,"c":"H","f":0.5294,"l":{"p":2},"r":{"p":5}}}},{"aspect":2.8284271247461894,"score":0.11581702469950524,"front":{"p":-1,"c":"H","f":0.3083,"l":{"p":-1,"c":"V","f":0.5,"l":{"p":0},"r":{"p":1}},"r":{"p":-1,"c":"H","f":0.5543,"l":{"p":-1,"c":"V","f":0.5854,"l":{"p":-1,"c":"H","f":0.5294,"l":{"p":2},"r":{"p":5}},"r":{"p":3}},"r":{"p":-1,"c":"V","f":0.5,"l":{"p":4},"r":{"p":7}}}},"back":{"p":-1,"c":"H","f":0.7143,"l":{"p":-1,"c":"H","f":0.48,"l":{"p":6},"r":{"p":9}},"r":{"p":8}}},{"aspect":3.4822022531844956,"score":0.12103219927349858,"front":{"p":-1,"c":"H","f":0.8039,"l":{"p":-1,"c":"H","f":0.3902,"l":{"p":0},"r":{"p":-1,"c":"H","f":0.48,"l":{"p":6},"r":{"p":9}}},"r":{"p":8}},"back":{"p":-1,"c":"H","f":0.5087,"l":{"p":-1,"c":"H","f":0.5455,"l":{"p":-1,"c":"V","f":0.6,"l":{"p":1},"r":{"p":3}},"r":{"p":-1,"c":"V","f":0.5,"l":{"p":4},"r":{"p":7}}},"r":{"p":-1,"c":"H","f":0.5294,"l":{"p":2},"r":{"p":5}}}},{"aspect":4.287093850145172,"score":0.1064753794949348,"front":{"p":-1,"c":"H","f":0.8298,"l":{"p":-1,"c":"H","f":0.4103,"l":{"p":0},"r":{"p":-1,"c":"H","f":0.4348,"l":{"p":8},"r":{"p":9}}},"r":{"p":5}},"back":{"p":-1,"c":"H","f":0.6891,"l":{"p":-1,"c":"H","f":0.6617,"l":{"p":-1,"c":"H","f":0.5455,"l":{"p":-1,"c":"V","f":0.6,"l":{"p":1},"r":{"p":3}},"r":{"p":-1,"c":"V","f":0.5,"l":{"p":4},"r":{"p":7}}},"r":{"p":2}},"r":{"p":6}}},{"aspect":5.278031643091576,"score":0.13060193748187074,"front":{"p":-1,"c":"H","f":0.5556,"l":{"p":-1,"c":"H","f":0.4,"l":{"p":0},"r":{"p":3}},"r":{"p":-1,"c":"H","f":0.5,"l":{"p":1},"r":{"p":7}}},"back":{"p":-1,"c":"H","f":0.5147,"l":{"p":-1,"c":"H","f":0.2571,"l":{"p":2},"r":{"p":-1,"c":"H","f":0.6154,"l":{"p":4},"r":{"p":8}}},"r":{"p":-1,"c":"H","f":0.2424,"l":{"p":5},"r":{"p":-1,"c":"H","f":0.48,"l":{"p":6},"r":{"p":9}}}}},{"aspect":6.498019170849883,"score":0.13757337945751436,"front":{"p":-1,"c":"H","f":0.8312,"l":{"p":-1,"c":"H","f":0.5,"l":{"p":-1,"c":"H","f":0.5,"l":{"p":0},"r":{"p":7}},"r":{"p":-1,"c":"H","f":0.5,"l":{"p":1},"r":{"p":4}}},"r":{"p":9}},"back":{"p":-1,"c":"H","f":0.619,"l":{"p":-1,"c":"H","f":0.6923,"l":{"p":-1,"c":"H","f":0.7037,"l":{"p":-1,"c":"H","f":0.4737,"l":{"p":2},"r":{"p":8}},"r":{"p":5}},"r":{"p":6}},"r":{"p":3}}}]}};
+const HOME={sx:1,sy:1,sz:1,rx:0.2,ry:-0.45};
+const LO=0.6, HI=1.5, COLS=46, CH=0.602, MAXW=9;
+const A=1.55, B=0.9, C=0.85, BEND=0.4;      // the bean before resizing: half-length, half-height, half-depth, and how far its ends curve back
+const TW=2048, TH=1024, V0=0.19, V1=0.81;   // the texture, and the band of it the panes use
+const el=(n,cls,txt)=>{const e=document.createElement(n);if(cls)e.className=cls;if(txt!=null)e.textContent=txt;return e};
+let sx=HOME.sx, sy=HOME.sy, sz=HOME.sz, rx=HOME.rx, ry=HOME.ry;
+let table=D.start.table, picked=-1;
+const info={shape:'',plan:''};
+
+const panes=D.panes.map(p=>({name:p.n,lines:p.t,cols:COLS,live:false,rect:null,half:0}));
+function fillRecorded(i){const P=panes[i];P.lines=D.panes[i].t;P.cols=COLS;P.live=false}
+
+// usage: how often each pane was opened or jumped to; kept in this browser
+let usage=D.panes.map(()=>0);
+try{const u=JSON.parse(localStorage.getItem('bean-usage')||'null');if(Array.isArray(u)&&u.length===usage.length)usage=u.map(v=>Math.max(0,v|0))}catch(e){}
+const weights=()=>usage.map(u=>1+Math.min(u,MAXW-1));
+function saveUsage(){try{localStorage.setItem('bean-usage',JSON.stringify(usage))}catch(e){}}
+
+function rects(t,x,y,w,h,out){
+  if(t.p>=0){out.push({p:t.p,x,y,w,h});return out}
+  if(t.c==='H'){rects(t.l,x,y,w*t.f,h,out);rects(t.r,x+w*t.f,y,w*(1-t.f),h,out)}
+  else{rects(t.l,x,y,w,h*t.f,out);rects(t.r,x,y+h*t.f,w,h*(1-t.f),out)}
+  return out}
+// how wide half the bean's waist is compared with the height of the pane band
+function halfAspect(){
+  const a=A*sx, c=C*sz, around=Math.PI*Math.sqrt((a*a+c*c)/2), up=(V1-V0)*Math.PI*B*sy*0.95;
+  return around/up}
+// the table has one entry per proportion: take the nearest
+function lookup(aspect){
+  let best=0;for(let i=1;i<table.length;i++)if(Math.abs(Math.log(table[i].aspect/aspect))<Math.abs(Math.log(table[best].aspect/aspect)))best=i;
+  return best}
+
+// the texture: both halves' panes drawn as text
+const tex=document.createElement('canvas');tex.width=TW;tex.height=TH;const g=tex.getContext('2d');
+function draw(){
+  const asp=halfAspect(), bandH=(V1-V0)*TH, bandY=V0*TH, halfW=TW/2;
+  const k=(bandH*asp)/halfW;                 // texture is stretched this much taller than wide on the surface
+  const at=lookup(asp), entry=table[at];
+  g.fillStyle='#0b1012';g.fillRect(0,0,TW,TH);
+  [entry.front,entry.back].forEach((tree,h)=>{
+    for(const r of rects(tree,0,0,1,1,[])){
+      const P=panes[r.p], x=h*halfW+r.x*halfW, y=bandY+r.y*bandH, w=r.w*halfW, hh=r.h*bandH;
+      P.rect={x,y,w,h:hh};P.half=h;P.share=r.w*r.h;
+      g.save();g.beginPath();g.rect(x,y,w,hh);g.clip();
+      g.fillStyle='#11181b';g.fillRect(x,y,w,hh);
+      g.translate(x,y);g.scale(1,k);
+      const fs=Math.max(4,Math.min(30,(w-14)/(P.cols*CH))), lh=fs*1.22, H=hh/k, sb=lh*1.15;
+      g.font='500 '+fs+'px "IBM Plex Mono", ui-monospace, Menlo, monospace';g.textBaseline='top';
+      const rows=Math.max(1,Math.floor((H-sb-4)/lh)), from=Math.max(0,P.lines.length-rows);
+      P.lines.slice(from).forEach((ln,j)=>{
+        if(ln.startsWith('$')){g.fillStyle='#7fd88b';g.fillText('$',7,4+j*lh);g.fillStyle='#d6dde0';g.fillText(ln.slice(1),7+fs*CH,4+j*lh)}
+        else{g.fillStyle='#d6dde0';g.fillText(ln,7,4+j*lh)}});
+      g.fillStyle=P.live?'#f2b84b':'#2f8f66';g.fillRect(0,H-sb,w,sb);
+      g.fillStyle='#07130e';g.fillText(r.p+':'+P.name+(P.live?'  live':''),7,H-sb+lh*0.08);
+      g.restore();
+      const on=r.p===picked;g.strokeStyle=on?'#ffd166':'#2f3b40';g.lineWidth=on?10:3;
+      g.strokeRect(x+g.lineWidth/2,y+g.lineWidth/2,w-g.lineWidth,hh-g.lineWidth)}});
+  const f=rects(entry.front,0,0,1,1,[]).length;
+  info.shape='Each half is '+asp.toFixed(2)+' times as wide as it is tall: entry '+(at+1)+' of '+table.length+' in the table. '+f+' panes on the front, '+(panes.length-f)+' on the back.';
+  if(texture)texture.needsUpdate=true}
+
+// the bean: a sphere stretched, then its two ends curved back
+let renderer=null, scene3=null, camera=null, bean=null, texture=null;
+const host=document.getElementById('scene'), touch=matchMedia('(pointer: coarse)').matches;
+function build(){
+  if(typeof THREE==='undefined')throw new Error('three.js did not load');
+  renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+  renderer.setPixelRatio(Math.min(devicePixelRatio||1,2));host.appendChild(renderer.domElement);
+  scene3=new THREE.Scene();camera=new THREE.PerspectiveCamera(32,1,0.1,100);
+  const geo=new THREE.SphereGeometry(1,144,80), pos=geo.attributes.position;
+  for(let i=0;i<pos.count;i++){
+    const x=pos.getX(i), y=pos.getY(i), z=pos.getZ(i);
+    pos.setXYZ(i,x*A,y*B,z*C-BEND*x*x+BEND*0.36)}
+  geo.computeVertexNormals();
+  texture=new THREE.CanvasTexture(tex);texture.anisotropy=renderer.capabilities.getMaxAnisotropy();
+  const mat=new THREE.MeshLambertMaterial({map:texture,emissive:0xffffff,emissiveMap:texture,emissiveIntensity:0.5});
+  bean=new THREE.Mesh(geo,mat);scene3.add(bean);
+  scene3.add(new THREE.AmbientLight(0xffffff,0.35));
+  const sun=new THREE.DirectionalLight(0xffffff,0.75);sun.position.set(-2,3,4);scene3.add(sun)}
+function frame(){
+  if(!renderer)return;
+  const w=host.clientWidth, h=host.clientHeight;
+  renderer.setSize(w,h,false);camera.aspect=w/h;
+  // the camera stays put, so a bigger bean looks bigger; it is placed to fit a bean somewhat larger than the starting one
+  const t=Math.tan(16*Math.PI/180), R=1.25, tall=B*R*1.08, wide=A*R*1.05;
+  camera.position.set(0,0,Math.max(tall/t,wide/(t*camera.aspect))+C*R);camera.updateProjectionMatrix();
+  bean.scale.set(sx,sy,sz);bean.rotation.set(rx,ry,0);
+  renderer.render(scene3,camera)}
+function apply(redraw){if(redraw)draw();frame();showInfo()}
+const clamp=v=>Math.max(LO,Math.min(HI,v));
+function scaleAll(f){const m=Math.min(HI/Math.max(sx,sy,sz),Math.max(LO/Math.min(sx,sy,sz),f));sx*=m;sy*=m;sz*=m}
+
+// the solver: Go compiled to WebAssembly, in a worker so the page stays responsive
+let worker=null, asked=0, pending=false, again=false;
+const solveNote=(t,busy)=>{info.plan=t;showInfo();const n=document.getElementById('note');n.textContent=busy?t:'';n.hidden=!busy};
+function describe(r,ms){return 'Planned by the dynamic program in '+(ms/1000).toFixed(1)+' s: '+r.states.toLocaleString()+' states, '+r.alternatives.toLocaleString()+' alternatives.'}
+function requestSolve(){
+  if(!worker){
+    try{worker=new Worker('lib/solver-worker.js')}catch(e){solveNote('The solver could not start here, so the layout stays as it was.');return}
+    worker.onmessage=e=>{
+      pending=false;
+      if(again){again=false;requestSolve();return}   // usage changed while it was solving: solve once more, for the latest
+      if(e.data.error){solveNote('The solver failed: '+e.data.error);return}
+      const r=JSON.parse(e.data.json);table=r.table;solveNote(describe(r,e.data.ms));apply(true);if(picked>=0)faceTo(picked)};   // the pane may have moved: face it again
+    worker.onerror=()=>{pending=false;again=false;solveNote('The solver could not start here, so the layout stays as it was.')}}
+  if(pending){again=true;return}
+  pending=true;solveNote('Re-planning the layout for your usage\u2026',true);
+  worker.postMessage({id:++asked,aspects:D.aspects,weights:weights()})}
+function use(i){usage[i]++;saveUsage();requestSolve()}
+function forget(){usage=usage.map(()=>0);saveUsage();requestSolve()}
+
+// turning: to bring a pane to face you
+let tween=0;
+// a point on the bean's surface, for texture position (u,v), after stretching, bending and resizing
+function surface(u,v){
+  const phi=u*2*Math.PI, th=(1-v)*Math.PI, x=-Math.cos(phi)*Math.sin(th), y=Math.cos(th), z=Math.sin(phi)*Math.sin(th);
+  return [x*A*sx, y*B*sy, (z*C-BEND*x*x+BEND*0.36)*sz]}
+// turn the bean so the surface at the middle of a pane faces you squarely
+function faceTo(i){
+  const P=panes[i];if(!P.rect)return;
+  const u=(P.rect.x+P.rect.w/2)/TW, v=1-(P.rect.y+P.rect.h/2)/TH, d=0.004;
+  const p=surface(u,v), a=surface(u+d,v), b=surface(u,v+d), du=[a[0]-p[0],a[1]-p[1],a[2]-p[2]], dv=[b[0]-p[0],b[1]-p[1],b[2]-p[2]];
+  let n=[du[1]*dv[2]-du[2]*dv[1], du[2]*dv[0]-du[0]*dv[2], du[0]*dv[1]-du[1]*dv[0]];
+  if(n[0]*p[0]+n[1]*p[1]+n[2]*p[2]<0)n=n.map(c=>-c);
+  let ty=Math.atan2(-n[0],n[2]), tx=Math.max(-1.2,Math.min(1.2,Math.atan2(n[1],Math.hypot(n[0],n[2]))));
+  ty+=2*Math.PI*Math.round((ry-ty)/(2*Math.PI));
+  const fx=rx, fy=ry, t0=performance.now(), still=matchMedia('(prefers-reduced-motion: reduce)').matches, me=++tween;
+  (function step(now){
+    if(me!==tween)return;
+    const t=still?1:Math.min(1,(now-t0)/420), e=1-Math.pow(1-t,3);
+    rx=fx+(tx-fx)*e;ry=fy+(ty-fy)*e;frame();if(t<1)requestAnimationFrame(step)})(t0)}
+// point at a pane: outline it and turn it to face you. It counts as used only when opened.
+function point(i){if(i===picked)return;picked=i;draw();frame();if(i>=0)faceTo(i)}
+
+function paneAt(clientX,clientY){
+  if(!renderer)return -1;
+  const r=host.getBoundingClientRect(), ray=new THREE.Raycaster();
+  ray.setFromCamera(new THREE.Vector2((clientX-r.left)/r.width*2-1,-((clientY-r.top)/r.height*2-1)),camera);
+  const hit=ray.intersectObject(bean)[0];if(!hit||!hit.uv)return -1;
+  const x=hit.uv.x*TW, y=(1-hit.uv.y)*TH;
+  return panes.findIndex(P=>P.rect&&x>=P.rect.x&&x<P.rect.x+P.rect.w&&y>=P.rect.y&&y<P.rect.y+P.rect.h)}
+// one finger turns, two fingers pinch to resize
+const touches=new Map();let drag=null, pinch=0;
+const spread=()=>{const p=[...touches.values()];return Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y)};
+host.addEventListener('pointerdown',e=>{
+  tween++;touches.set(e.pointerId,{x:e.clientX,y:e.clientY});host.setPointerCapture(e.pointerId);
+  if(touches.size===2){pinch=spread();drag=null}else drag={x:e.clientX,y:e.clientY,moved:0}});
+host.addEventListener('pointermove',e=>{
+  if(!touches.has(e.pointerId))return;touches.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(touches.size===2&&pinch){const d=spread();if(Math.abs(d-pinch)>2){scaleAll(d/pinch);pinch=d;apply(true)}return}
+  if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;drag.moved+=Math.abs(dx)+Math.abs(dy);
+  ry+=dx*0.011;rx=Math.max(-1.4,Math.min(1.4,rx+dy*0.011));drag.x=e.clientX;drag.y=e.clientY;frame()});
+host.addEventListener('pointerup',e=>{
+  touches.delete(e.pointerId);pinch=0;const d=drag;drag=null;
+  if(d&&d.moved<8&&touches.size===0){const p=paneAt(e.clientX,e.clientY);if(p>=0){picked=p;use(p);openPane(p)}}});
+host.addEventListener('pointercancel',e=>{touches.delete(e.pointerId);pinch=0;drag=null});
+
+// fuzzy search: the letters must appear in order; runs of letters and starts of words score higher
+function fuzzy(q,text){
+  const s=text.toLowerCase();let qi=0, score=0, run=0;const at=[];
+  for(let i=0;i<s.length&&qi<q.length;i++){
+    if(s[i]===q[qi]){run++;score+=1+run*2+(i===0||/[^a-z0-9]/.test(s[i-1])?6:0);at.push(i);qi++}else run=0}
+  if(qi<q.length)return null;
+  return {score:score-(at[at.length-1]-at[0]-q.length)*0.15-s.length*0.01,at}}
+function search(raw){
+  const q=raw.toLowerCase().replace(/\s+/g,'');if(!q)return [];
+  const out=[];
+  panes.forEach((P,i)=>{
+    let best=null;const name=i+':'+P.name, m=fuzzy(q,name);
+    if(m)best={score:m.score+12,line:null,at:m.at,name:true};
+    for(const ln of D.panes[i].t){const k=fuzzy(q,ln);if(k&&(!best||k.score>best.score))best={score:k.score,line:ln,at:k.at,name:false}}
+    if(best)out.push({i,...best})});
+  out.sort((a,b)=>b.score-a.score||a.i-b.i);
+  return out.filter(h=>h.score>=out[0].score*0.5).slice(0,4)}   // weak matches far behind the best are noise
+
+// what the help sheet reports
+function showInfo(){
+  document.getElementById('infoPlan').textContent=info.plan;
+  document.getElementById('infoShape').textContent=info.shape;
+  const used=usage.map((u,i)=>u?i+':'+panes[i].name+' ×'+u:'').filter(Boolean);
+  document.getElementById('infoUse').textContent=used.length?'Opened: '+used.join(', ')+'.':'Nothing opened yet, so every pane has the same weight.'}
+
+// typing: the best match is pointed at straight away; there is no list
+const qEl=document.getElementById('q');
+function retarget(){
+  const hits=search(qEl.value);
+  qEl.classList.toggle('miss',!!qEl.value.trim()&&!hits.length);
+  point(hits.length?hits[0].i:-1)}
+qEl.addEventListener('input',retarget);
+function setQuery(v){qEl.value=v;retarget()}
+function openPicked(){if(picked>=0){const i=picked;use(i);openPane(i)}}
+function step(d){const n=panes.length, from=picked<0?(d>0?-1:0):picked;qEl.value='';qEl.classList.remove('miss');point((from+d+n)%n)}
+function toggleHelp(force){const h=document.getElementById('help');h.hidden=force===undefined?!h.hidden:!force}
+
+// every key: in the terminal only Ctrl ] is ours, the rest go to the machine
+addEventListener('keydown',e=>{
+  if(!document.getElementById('term').hidden){
+    if(e.ctrlKey&&e.key===']'){e.preventDefault();e.stopImmediatePropagation();backToBean()}
+    return}
+  const mod=e.metaKey||e.ctrlKey, inBox=e.target===qEl;
+  if(e.key==='F1'){e.preventDefault();toggleHelp();return}
+  if(!document.getElementById('help').hidden){if(e.key==='Escape'){e.preventDefault();toggleHelp(false)}return}
+  if(e.key==='Enter'){
+    e.preventDefault();
+    if(e.altKey){try{const p=document.documentElement.requestFullscreen&&document.documentElement.requestFullscreen();if(p&&p.catch)p.catch(()=>{})}catch(err){}return}
+    openPicked();return}
+  if(e.key==='Escape'){e.preventDefault();setQuery('');return}
+  if(e.key==='Tab'){e.preventDefault();step(e.shiftKey?-1:1);return}
+  if(e.key==='Home'){e.preventDefault();tween++;sx=HOME.sx;sy=HOME.sy;sz=HOME.sz;rx=HOME.rx;ry=HOME.ry;apply(true);return}
+  if(mod&&e.key==='Backspace'){e.preventDefault();forget();return}
+  if(e.key.startsWith('Arrow')){
+    e.preventDefault();
+    if(mod){
+      if(e.key==='ArrowUp')scaleAll(1.06);else if(e.key==='ArrowDown')scaleAll(1/1.06);
+      else if(e.key==='ArrowRight')sx=clamp(sx+0.06);else sx=clamp(sx-0.06);
+      apply(true);return}
+    const k={ArrowLeft:[0,-0.2],ArrowRight:[0,0.2],ArrowUp:[-0.15,0],ArrowDown:[0.15,0]}[e.key];
+    tween++;rx=Math.max(-1.4,Math.min(1.4,rx+k[0]));ry+=k[1];frame();return}
+  if(inBox||mod||e.altKey)return;            // the box handles its own text
+  if(e.key==='Backspace'){e.preventDefault();setQuery(qEl.value.slice(0,-1));return}
+  if(e.key.length===1){e.preventDefault();setQuery(qEl.value+e.key)}
+},true);
+
+// one emulated PC per opened pane; the two most recently opened stay running
+const vms=new Map(); let current=-1;
+const KEYS={ctrlc:[0x1D,0x2E,0xAE,0x9D],tab:[0x0F,0x8F],up:[0xE0,0x48,0xE0,0xC8],enter:[0x1C,0x9C]};
+let parts=null; // the BIOS and the Linux disc, fetched once and shared by every machine
+const bytes=b64=>{const s=atob(b64), u=new Uint8Array(s.length);for(let i=0;i<s.length;i++)u[i]=s.charCodeAt(i);return u.buffer};
+function loadParts(){
+  return parts||(parts=Promise.all([fetch('vm/bios.json').then(r=>r.json()),fetch('vm/linux.txt').then(r=>r.text())])
+    .then(([b,l])=>({seabios:bytes(b.seabios),vgabios:bytes(b.vgabios),linux:bytes(l)})))}
+function startVM(i){
+  const c=el('div','vm');c.append(el('div'),Object.assign(el('canvas'),{hidden:true}));
+  document.getElementById('vmwrap').appendChild(c);
+  const vm={emu:null,c,ready:false,gone:false};vms.set(i,vm);
+  loadParts().then(p=>{
+    if(vm.gone)return;
+    vm.emu=new V86({wasm_path:'vm/v86.wasm',memory_size:32*1024*1024,vga_memory_size:2*1024*1024,screen_container:c,
+      bios:{buffer:p.seabios.slice(0)},vga_bios:{buffer:p.vgabios.slice(0)},cdrom:{buffer:p.linux.slice(0)},autostart:true,disable_mouse:true});
+    vm.emu.keyboard_set_status(current===i);
+    vm.emu.add_listener('emulator-ready',()=>{vm.ready=true;if(current===i)setState()});
+  }).catch(()=>{vm.failed=true;if(current===i)setState()});
+  if(vms.size>2)stopVM([...vms.keys()].find(k=>k!==i))}
+function stopVM(i){const vm=vms.get(i);if(!vm)return;vm.gone=true;try{vm.emu&&vm.emu.destroy()}catch(e){}vm.c.remove();vms.delete(i);fillRecorded(i);draw();frame()}
+function screenText(vm){return [...vm.c.firstElementChild.children].map(r=>r.textContent.replace(/\s+$/,''))}
+function setState(){
+  const vm=vms.get(current);
+  document.getElementById('vmstate').textContent=current+':'+D.panes[current].n+(vm&&vm.failed?'  could not load the machine\u2019s files':vm&&vm.ready?'':'  starting, about 10 MB to load the first time')+(touch?'':'   \u00b7   Ctrl ] returns to the bean')}
+function openPane(i){
+  current=i;
+  if(typeof V86==='undefined'){
+    document.getElementById('vmstate').textContent='The emulator did not load, so there is no terminal to open.';
+  }else{
+    if(vms.has(i)){const vm=vms.get(i);vms.delete(i);vms.set(i,vm)} // most recently opened goes last
+    else startVM(i);
+    for(const [k,vm] of vms){vm.c.hidden=k!==i;vm.emu&&vm.emu.keyboard_set_status(k===i)} // only the open machine hears the keyboard
+    setState();
+  }
+  document.getElementById('stage').hidden=true;document.getElementById('term').hidden=false;
+  if(touch)document.getElementById('cmd').focus({preventScroll:true})}
+function backToBean(){
+  document.getElementById('term').hidden=true;document.getElementById('stage').hidden=false;current=-1;for(const vm of vms.values())vm.emu&&vm.emu.keyboard_set_status(false);mirror();frame();if(!touch)document.getElementById('q').focus({preventScroll:true})}
+document.getElementById('back').addEventListener('click',backToBean);
+document.getElementById('send').addEventListener('submit',e=>{
+  e.preventDefault();const vm=vms.get(current), inp=document.getElementById('cmd');if(!vm||!vm.emu)return;
+  vm.emu.keyboard_send_text(inp.value+'\n');inp.value=''});
+document.querySelectorAll('.keysrow button').forEach(b=>b.addEventListener('click',()=>{const vm=vms.get(current);if(vm&&vm.emu)vm.emu.keyboard_send_scancodes(KEYS[b.dataset.k])}));
+function mirror(){
+  let any=false;
+  for(const [i,vm] of vms){
+    if(!vm.emu)continue;
+    const rows=screenText(vm);let last=rows.length;while(last>0&&!rows[last-1])last--;
+    const P=panes[i];P.cols=80;P.live=true;P.lines=rows.slice(Math.max(0,last-24),last);any=true}
+  if(any){draw();frame()}}
+setInterval(()=>{if(vms.size&&document.getElementById('term').hidden)mirror()},1000);
+
+try{build()}catch(err){host.appendChild(el('div','nogl','This browser could not draw the 3D bean. Type a pane’s name and press Enter to open it.'))}
+addEventListener('resize',frame);
+info.plan='Planned ahead of time for ten panes used equally: '+D.start.states.toLocaleString()+' states, '+D.start.alternatives.toLocaleString()+' alternatives.';
+apply(true);
+if(usage.some(u=>u>0))requestSolve();
+if(!touch)qEl.focus({preventScroll:true});
+if(document.fonts&&document.fonts.load)document.fonts.load('500 20px "IBM Plex Mono"').then(()=>apply(true)).catch(()=>{});
+</script>
+</body>
+</html>
